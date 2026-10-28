@@ -28,6 +28,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from app.multiorg import organizacion_del_despacho
+from app.crm_bot_org import BotOrgCrmClient
 from app.http_limits import limited_body
 from app.state import AppContext, InboundMessage
 from app.turn import conversation_lock, handle_flush, marca_de_leido
@@ -363,7 +364,11 @@ async def _contexto_multiorg(
         await _a_humano(cliente, conversation_id, "error")
         return None
 
-    config_ia = cliente.credenciales_llm()
+    config_ia = (
+        await registro.config_llm(org_id, slug)
+        if isinstance(cliente, BotOrgCrmClient)
+        else cliente.credenciales_llm()
+    )
     if not config_ia:
         # El CRM no ofrece pensar por esta organización. O este despliegue no
         # es de confianza, o el miembro no tiene token activo. En los dos

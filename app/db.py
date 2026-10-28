@@ -76,8 +76,11 @@ def _pending_send_desde_fila(row: Any) -> PendingSend:
 class PgStore(PgDispatchStore):
     """Store respaldado por Postgres (asyncpg)."""
 
-    def __init__(self, dsn: str, schema: str = "") -> None:
+    def __init__(self, dsn: str, schema: str = "", pool_max: int = 5) -> None:
         self._dsn = dsn
+        # Cada ciclo del despacho retiene una conexión mientras atiende (el candado del negocio es
+        # de sesión): el pool tiene que dar para todos los ciclos y para el resto del trabajo.
+        self._pool_max = pool_max
         # 031 — Vacío = `public`, como siempre. Con nombre, las tablas de Nea
         # viven en ese esquema y la base se puede compartir con el CRM. El
         # nombre ya llega validado por `Settings` (minúsculas, dígitos y `_`).
@@ -92,7 +95,7 @@ class PgStore(PgDispatchStore):
 
     async def connect(self) -> None:
         if not self._schema:
-            self._pool = await asyncpg.create_pool(self._dsn, min_size=1, max_size=5)
+            self._pool = await asyncpg.create_pool(self._dsn, min_size=1, max_size=self._pool_max)
             return
         # El esquema tiene que existir ANTES de abrir el pool: con un
         # `search_path` que apunta a un esquema que no existe, Postgres acepta
@@ -106,7 +109,7 @@ class PgStore(PgDispatchStore):
         self._pool = await asyncpg.create_pool(
             self._dsn,
             min_size=1,
-            max_size=5,
+            max_size=self._pool_max,
             server_settings={"search_path": self._schema},
         )
         logger.info("tablas de Nea en el esquema %s", self._schema)

@@ -72,6 +72,8 @@ class Settings(BaseSettings):
     # firma es esta misma llave, la que autentica lo que Nea le manda al CRM.
     crm_base_url: str = "http://localhost:3000"
     crm_bot_api_key: str = ""
+    # Vacía/brains conserva cloud; bot habilita /api/bot/* multi-negocio.
+    crm_surface: str = Field(default="", pattern=r"^(|brains|bot)$")
 
     # Perfil del negocio (capa de persona; ver app/profile.py)
     agent_name: str = "Nea"  # se usa si el CRM no define nombre
@@ -196,6 +198,12 @@ class Settings(BaseSettings):
     # silencio durante este tiempo; un mensaje con contenido reabre siempre.
     stall_cooldown_hours: float = Field(default=24.0, ge=0)
 
+    # Cuántos despachos se atienden a la vez (de negocios distintos: un negocio nunca ocupa más de
+    # uno). 1 = como antes. Súbelo con varios negocios y un modelo lento.
+    dispatch_workers: int = Field(default=4, ge=1, le=32)
+    # Despachos terminados: el payload contiene mensajes de clientes.
+    dispatch_retention_days: int = Field(default=14, ge=1)
+
     # ── Modo cloud (Vocero multitenant) ───────────────────────────────
     #
     # En los dos modos el CRM recibe el mensaje y se lo DESPACHA a Nea
@@ -205,8 +213,9 @@ class Settings(BaseSettings):
     # `/api/bot/*`.
     #
     # `cloud` = Nea vive detrás de un Vocero multitenant: firma con
-    # `CRM_BRAIN_SECRET`, contesta por `/api/brains/*`. Su personalidad y su
-    # conocimiento vienen de SU CRM.
+    # `CRM_BRAIN_SECRET`, contesta por `/api/brains/*` (vacío/brains).
+    # Multi-org con CRM_SURFACE=bot firma con CRM_BOT_API_KEY y usa /api/bot/*.
+    # Su personalidad y su conocimiento vienen de SU CRM.
     #
     # Con `crm_organization` puesta atiende a ESE negocio y a nadie más: un
     # despacho de otra organización viene firmado con otro secreto y se
@@ -314,6 +323,8 @@ class Settings(BaseSettings):
         cerebro en cloud, la llave de `/api/bot/*` contra la raíz. Así no hay
         un secreto más que copiar entre los dos.
         """
+        if self.multi_org and self.crm_surface == "bot":
+            return self.crm_bot_api_key
         return self.crm_brain_secret if self.cloud_mode else self.crm_bot_api_key
 
     @staticmethod

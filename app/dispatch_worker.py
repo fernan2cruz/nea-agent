@@ -60,6 +60,30 @@ async def drain_one(ctx: Any) -> bool:
 
 
 async def run(ctx: Any) -> None:
+    """Varios ciclos a la vez, uno de los cuales atiende como máximo a un negocio.
+
+    Un solo ciclo atendía los despachos de TODOS los negocios uno tras otro: con un modelo de varios
+    segundos por respuesta, la ráfaga de un cliente hacía esperar a los demás. Ahora hay
+    `DISPATCH_WORKERS` ciclos, y `claim_dispatch` toma un candado por negocio: un negocio nunca ocupa
+    más de un ciclo (sus mensajes siguen en orden) y los demás ciclos atienden a los otros.
+    """
+    n = max(1, int(getattr(getattr(ctx, "settings", None), "dispatch_workers", 1) or 1))
+    await asyncio.gather(_purga_periodica(ctx), *(_ciclo(ctx) for _ in range(n)))
+
+
+async def _purga_periodica(ctx: Any) -> None:
+    """Un ciclo por proceso, independiente del número de consumidores."""
+    while True:
+        try:
+            days = ctx.settings.dispatch_retention_days
+            while await ctx.store.purge_dispatches(days) == 1000:
+                await asyncio.sleep(0)
+        except Exception:
+            logger.error("No se pudieron purgar los despachos antiguos")
+        await asyncio.sleep(86400)
+
+
+async def _ciclo(ctx: Any) -> None:
     while True:
         try:
             if await drain_one(ctx):

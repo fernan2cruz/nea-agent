@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Any
 
 from app.crm import CrmConflict, CrmError
+from app.crm_bot_org import BotOrgCrmClient
 from app.formato import a_whatsapp
 from app.llm import LlmExhausted
 from app.profile import resolve_profile
@@ -128,7 +129,11 @@ class FollowupWorker:
         # pensar, no se piensa — usar la llave del entorno le cobraría al
         # dueño de la plataforma el consumo de sus miembros.
         if ctx.settings.multi_org:
-            config_ia = getattr(ctx.crm, "credenciales_llm", lambda: None)()
+            config_ia = (
+                await ctx.registro.config_llm(conv.organization_id, conv.organization_slug)
+                if isinstance(ctx.crm, BotOrgCrmClient)
+                else getattr(ctx.crm, "credenciales_llm", lambda: None)()
+            )
             if not config_ia:
                 logger.warning(
                     "followup %s: el CRM no ofrece IA — omitido",

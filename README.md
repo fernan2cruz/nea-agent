@@ -133,6 +133,20 @@ clave de LLM son los de él.
   la misma persona puede escribirle a dos negocios sin que el historial de uno
   aparezca en el prompt del otro.
 
+#### Varios negocios por `/api/bot/*` (spec 065)
+
+Configura `VOCERO_MODE=cloud`, `CRM_ORGANIZATION=` y `CRM_SURFACE=bot`.
+El secreto del despliegue y la firma del despacho son `CRM_BOT_API_KEY`
+(el `BOT_API_KEY` del CRM); `CRM_BRAIN_SECRET` no se usa en este modo.
+Nea envía `Authorization: Bearer <credencial derivada>` y
+`X-Vocero-Organization: <organization.id>` usando el ID del despacho, nunca
+el slug. Conserva las rutas y respuestas de `/api/bot/*`.
+
+El modelo se lee de `llm.model` en `/api/bot/profile`, con caché por negocio;
+si falta, se usa `LLM_MODEL`. Siempre piensa por `/api/bot/llm`, sin usar
+`LLM_API_KEY`. Sin modelo que oiga declarado por el CRM, no transcribe.
+Con `CRM_SURFACE` vacía o `brains`, se conserva el contrato cloud anterior.
+
 #### Cuando el CRM elimina una conversación
 
 El CRM avisa por la misma ruta y con la misma firma, con

@@ -49,6 +49,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from app.crm_brains import BrainsCrmClient
+from app.crm_bot_org import BotOrgCrmClient
 from app.llm import OpenAiLlm
 from app.profile import ProfileProvider
 
@@ -84,8 +85,8 @@ class RegistroDeOrganizaciones:
     uno por mensaje abriría y cerraría sockets en cada turno contra el mismo
     CRM.
 
-    La caché es por `organization_id` y no por slug: el slug es lo que viaja en
-    la cabecera, pero el id es lo que firma la credencial. Si un miembro
+    La caché es por `organization_id` y no por slug: brains envía el slug en
+    la cabecera, bot envía el id; ambos firman por id. Si un miembro
     renombrara su subdominio, la credencial seguiría siendo la correcta.
     """
 
@@ -94,27 +95,30 @@ class RegistroDeOrganizaciones:
         base_url: str,
         secreto_despliegue: str,
         *,
+        surface: str = "",
         nombre_por_defecto: str = "Nea",
         brief_path: str | None = None,
     ) -> None:
         self._base_url = base_url
+        self._surface = surface
         self._secreto = secreto_despliegue
         self._nombre = nombre_por_defecto
         self._brief = brief_path
-        self._clientes: dict[str, BrainsCrmClient] = {}
+        self._clientes: dict[str, BrainsCrmClient | BotOrgCrmClient] = {}
         self._perfiles: dict[str, ProfileProvider] = {}
         # Cacheados por la tupla completa y no por organizacion: si el miembro
         # cambia de modelo, la tupla cambia y el siguiente turno ya usa el
         # cliente nuevo sin que nadie tenga que invalidar nada.
         self._llms: dict[tuple[str, str, str, str], OpenAiLlm] = {}
 
-    def cliente(self, organization_id: str, slug: str) -> BrainsCrmClient:
+    def cliente(self, organization_id: str, slug: str) -> BrainsCrmClient | BotOrgCrmClient:
         cliente = self._clientes.get(organization_id)
         if cliente is None:
-            cliente = BrainsCrmClient(
+            clase = BotOrgCrmClient if self._surface == "bot" else BrainsCrmClient
+            cliente = clase(
                 self._base_url,
                 credencial_derivada(self._secreto, organization_id),
-                slug,
+                organization_id if self._surface == "bot" else slug,
             )
             self._clientes[organization_id] = cliente
             logger.info(
@@ -140,6 +144,15 @@ class RegistroDeOrganizaciones:
             self._perfiles[organization_id] = proveedor
         return proveedor
 
+    async def config_llm(self, organization_id: str, slug: str) -> dict[str, Any] | None:
+        """Configuración por contexto en brains, por perfil con TTL en bot."""
+        if self._surface == "bot":
+            perfil = await self.perfil(organization_id, slug).get()
+            # El proxy existe aunque no haya perfil o llave configurada: el
+            # CRM decidirá (402 sin_credencial), nunca se usa la llave local.
+            return {"path": "/api/bot/llm", "model": perfil.llm_model}
+        return self.cliente(organization_id, slug).credenciales_llm()
+
     def llm(
         self,
         organization_id: str,
@@ -161,9 +174,10 @@ class RegistroDeOrganizaciones:
         eligió uno que oiga, es mejor no transcribir que mandarle el audio a
         uno que no oye y quedarnos con lo que invente.
         """
-        base_url = self._base_url.rstrip("/") + str(
+        path = "/api/bot/llm" if self._surface == "bot" else str(
             config.get("path") or "/api/brains/llm"
         )
+        base_url = self._base_url.rstrip("/") + path
         model = str(config.get("model") or por_defecto.llm_model)
         transcribe = str(config.get("transcribeModel") or "")
         credencial = credencial_derivada(self._secreto, organization_id)
@@ -175,7 +189,9 @@ class RegistroDeOrganizaciones:
                 model,
                 transcribe_model=transcribe,
                 base_url=base_url,
-                default_headers={"X-Vocero-Organization": slug},
+                default_headers={
+                    "X-Vocero-Organization": organization_id if self._surface == "bot" else slug
+                },
                 # Los ajustes de velocidad son de esta Nea, no del miembro:
                 # el CRM reenvia el cuerpo TAL CUAL, asi que `extra_body`
                 # llega al proveedor igual que en mono-organizacion.

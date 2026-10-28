@@ -170,7 +170,11 @@ def create_app(ctx: AppContext | None = None) -> FastAPI:
         if own_resources:
             settings = Settings()
             _avisar_obsoletas()
-            store = PgStore(settings.database_url, settings.database_schema)
+            store = PgStore(
+                settings.database_url,
+                settings.database_schema,
+                pool_max=settings.dispatch_workers + 8,
+            )
             await store.connect()
             await store.migrate(MIGRATIONS_DIR)
             logger.info("migraciones aplicadas — DB lista")
@@ -187,7 +191,8 @@ def create_app(ctx: AppContext | None = None) -> FastAPI:
             if settings.multi_org:
                 registro = RegistroDeOrganizaciones(
                     settings.crm_base_url,
-                    settings.crm_brain_secret,
+                    settings.dispatch_secret,
+                    surface=settings.crm_surface,
                     nombre_por_defecto=settings.agent_name,
                     brief_path=settings.brief_path or None,
                 )

@@ -27,6 +27,16 @@ class DispatchJob:
 class PgDispatchStore:
     pool: Any
 
+    async def purge_dispatches(self, days: int = 14) -> int:
+        if days < 1:
+            raise ValueError("Antigüedad inválida")
+        rows = await self.pool.fetch("""DELETE FROM dispatch_inbox WHERE (organization_id,dispatch_id) IN
+          (SELECT organization_id,dispatch_id FROM dispatch_inbox
+           WHERE state='done' AND updated_at < now() - $1 * interval '1 day'
+           ORDER BY updated_at LIMIT 1000 FOR UPDATE SKIP LOCKED)
+          RETURNING dispatch_id""", days)
+        return len(rows)
+
     async def enqueue_dispatch(self, org: str, payload: dict[str, Any]) -> None:
         await self.pool.execute("""INSERT INTO dispatch_inbox
           (organization_id,dispatch_id,conversation_id,payload) VALUES ($1,$2,$3,$4::jsonb)
@@ -41,8 +51,11 @@ class PgDispatchStore:
     @asynccontextmanager
     async def claim_dispatch(self) -> AsyncIterator[DispatchJob | None]:
         async with self.pool.acquire() as conn:
-            candidates = await conn.fetch("""SELECT DISTINCT organization_id FROM dispatch_inbox
-              WHERE state<>'done' AND available_at<=now() LIMIT 50""")
+            # El negocio que lleva más tiempo esperando va primero: sin orden, el de id menor se
+            # llevaba siempre el turno y uno con mucho tráfico podía dejar sin atender a los demás.
+            candidates = await conn.fetch("""SELECT organization_id FROM dispatch_inbox
+              WHERE state<>'done' AND available_at<=now()
+              GROUP BY organization_id ORDER BY min(created_at) LIMIT 50""")
             for candidate in candidates:
                 org = candidate["organization_id"]
                 key = "nea:dispatch:" + org
@@ -86,6 +99,17 @@ class PgDispatchStore:
 
 
 class MemoryDispatchStore:
+    async def purge_dispatches(self, days: int = 14) -> int:
+        if days < 1:
+            raise ValueError("Antigüedad inválida")
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        inbox = self._inbox()
+        keys = [key for key, row in inbox.items() if row["state"] == "done"
+                and row.get("updated_at", row["available_at"]) < cutoff][:1000]
+        for key in keys:
+            del inbox[key]
+        return len(keys)
+
     def _inbox(self) -> dict[Any, Any]:
         if not hasattr(self, "dispatch_inbox"):
             self.dispatch_inbox: dict[Any, Any] = {}
@@ -116,6 +140,7 @@ class MemoryDispatchStore:
 
                 async def finish() -> None:
                     row["state"] = "done"
+                    row["updated_at"] = datetime.now(timezone.utc)
 
                 async def heartbeat() -> None:
                     row["available_at"] = datetime.now(timezone.utc) + timedelta(minutes=3)
