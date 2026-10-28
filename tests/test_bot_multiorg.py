@@ -204,7 +204,7 @@ async def test_modelo_se_relee_tras_ttl_y_no_inventa_modelo_de_audio(respx_mock)
         assert first._model == "primero"
         assert first._transcribe_model == ""
         route.respond(200, json={"profile": {}, "llm": {"model": "segundo"}})
-        reg.perfil("org_a", "a")._fetched_at = 0
+        reg.perfil("org_a", "a")._fetched_at = float("-inf")  # vencido aun si monotonic() es chico (runner recién arrancado)
         config = await reg.config_llm("org_a", "a")
         second = reg.llm("org_a", "a", config, ctx.settings)
         assert second is not first
